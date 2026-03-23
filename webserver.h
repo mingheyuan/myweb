@@ -16,6 +16,7 @@ public:
 
 private:
     int m_port;
+    int m_listenfd;
 };
 
 #endif
