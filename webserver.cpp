@@ -1,4 +1,5 @@
 #include "webserver.h"
+#include "logger.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -7,8 +8,12 @@
 #include <netinet/in.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <ctime>
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 const int kMaxEvents = 1024;
@@ -57,9 +62,10 @@ void remove_fd(int epollfd, int fd)
 }
 } // namespace
 
-WebServer::WebServer() : m_port(9006), m_listenfd(-1), m_epollfd(-1) {}
+WebServer::WebServer() : m_port(9006), m_listenfd(-1), m_epollfd(-1), m_timeout_sec(15) {}
 
 WebServer::~WebServer() {
+    Logger::instance().shutdown();
     if (m_epollfd != -1) {
         close(m_epollfd);
         m_epollfd = -1;
@@ -73,10 +79,15 @@ WebServer::~WebServer() {
 void WebServer::init(int port) {
     m_port = port;
     std::cout << "[init] port = " << m_port << std::endl;
+    Logger::instance().info(std::string("server init, port=") + std::to_string(m_port));
 }
 
 void WebServer::log_write() {
-    std::cout << "[log] not implemented yet" << std::endl;
+    if (Logger::instance().init("./server.log", false)) {
+        Logger::instance().info("logger initialized in sync mode");
+    } else {
+        std::cerr << "[log] init failed, fallback to stderr" << std::endl;
+    }
 }
 
 void WebServer::sql_pool() {
@@ -86,6 +97,7 @@ void WebServer::sql_pool() {
 void WebServer::thread_pool() {
     m_pool.reset(new ThreadPool(4));
     std::cout << "[threadpool] started with 4 workers" << std::endl;
+    Logger::instance().info("thread pool started with 4 workers");
 }
 
 void WebServer::trig_mode() {
@@ -96,6 +108,7 @@ void WebServer::eventListen() {
     m_listenfd =socket(AF_INET,SOCK_STREAM,0);
     if (m_listenfd <0) {
         std::perror("socket");
+        Logger::instance().error(std::string("socket failed: ") + std::strerror(errno));
         m_listenfd = -1;
         return;
     }
@@ -103,6 +116,7 @@ void WebServer::eventListen() {
     int reuse =1;
     if (setsockopt(m_listenfd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse))< 0) {
         std::perror("setsockopt");
+        Logger::instance().error(std::string("setsockopt failed: ") + std::strerror(errno));
         close(m_listenfd);
         m_listenfd = -1;
         return;
@@ -116,6 +130,7 @@ void WebServer::eventListen() {
 
     if (bind(m_listenfd,reinterpret_cast<sockaddr*>(&addr),sizeof(addr))<0) {
         std::perror("bind");
+        Logger::instance().error(std::string("bind failed: ") + std::strerror(errno));
         close(m_listenfd);
         m_listenfd = -1;
         return;
@@ -123,6 +138,7 @@ void WebServer::eventListen() {
 
     if (listen(m_listenfd,8)<0) {
         std::perror("listen");
+        Logger::instance().error(std::string("listen failed: ") + std::strerror(errno));
         close(m_listenfd);
         m_listenfd = -1;
         return;
@@ -131,6 +147,7 @@ void WebServer::eventListen() {
     m_epollfd = epoll_create1(0);
     if (m_epollfd < 0) {
         std::perror("epoll_create1");
+        Logger::instance().error(std::string("epoll_create1 failed: ") + std::strerror(errno));
         close(m_listenfd);
         m_listenfd = -1;
         return;
@@ -138,6 +155,7 @@ void WebServer::eventListen() {
 
     if (!add_epollin_fd(m_epollfd, m_listenfd, false)) {
         std::perror("add listenfd to epoll");
+        Logger::instance().error(std::string("add listenfd to epoll failed: ") + std::strerror(errno));
         close(m_epollfd);
         m_epollfd = -1;
         close(m_listenfd);
@@ -146,11 +164,13 @@ void WebServer::eventListen() {
     }
 
     std::cout<<"[listen] 0.0.0.0:"<<m_port<<std::endl;
+    Logger::instance().info(std::string("listen on 0.0.0.0:") + std::to_string(m_port));
 }
 
 void WebServer::eventLoop() {
     if (m_listenfd <0 || m_epollfd < 0) {
         std::cerr << "[loop] listen/epoll fd invalid" << std::endl;
+        Logger::instance().error("event loop start failed: listen/epoll fd invalid");
         return;
     }
 
@@ -158,13 +178,35 @@ void WebServer::eventLoop() {
     std::cout << "[loop] epoll LT waiting events..." <<std::endl;
 
     while (true) {
-        int event_cnt = epoll_wait(m_epollfd, events, kMaxEvents, -1);
+        int event_cnt = epoll_wait(m_epollfd, events, kMaxEvents, 1000);
         if (event_cnt < 0) {
             if (errno == EINTR) {
                 continue;
             }
             std::perror("epoll_wait");
+            Logger::instance().error(std::string("epoll_wait failed: ") + std::strerror(errno));
             break;
+        }
+
+        std::time_t now = std::time(nullptr);
+        std::vector<int> expired = m_timer.collect_expired(now, m_timeout_sec);
+        for (std::size_t i = 0; i < expired.size(); ++i) {
+            int expired_fd = expired[i];
+            std::shared_ptr<HttpConn> conn;
+            {
+                std::lock_guard<std::mutex> lock(m_users_mutex);
+                std::unordered_map<int, std::shared_ptr<HttpConn> >::iterator it = m_users.find(expired_fd);
+                if (it != m_users.end()) {
+                    conn = it->second;
+                    m_users.erase(it);
+                }
+            }
+
+            if (conn) {
+                conn->close_conn();
+                Logger::instance().warn(std::string("idle timeout close fd=") + std::to_string(expired_fd));
+            }
+            remove_fd(m_epollfd, expired_fd);
         }
 
         for (int i = 0; i < event_cnt; ++i) {
@@ -177,12 +219,14 @@ void WebServer::eventLoop() {
                 if (connfd < 0) {
                     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                         std::perror("accept");
+                        Logger::instance().error(std::string("accept failed: ") + std::strerror(errno));
                     }
                     continue;
                 }
 
                 if (!add_epollin_fd(m_epollfd, connfd, true)) {
                     std::perror("add connfd to epoll");
+                    Logger::instance().error(std::string("add connfd to epoll failed: ") + std::strerror(errno));
                     close(connfd);
                     continue;
                 }
@@ -193,10 +237,16 @@ void WebServer::eventLoop() {
                     std::lock_guard<std::mutex> lock(m_users_mutex);
                     m_users[connfd] = conn;
                 }
+                m_timer.add(connfd, now);
 
                 std::cout << "[accept] " << inet_ntoa(client.sin_addr)
                           << ":" << ntohs(client.sin_port)
                           << " fd=" << connfd << std::endl;
+                {
+                    std::ostringstream oss;
+                    oss << "accept " << inet_ntoa(client.sin_addr) << ":" << ntohs(client.sin_port) << " fd=" << connfd;
+                    Logger::instance().info(oss.str());
+                }
                 continue;
             }
 
@@ -230,22 +280,27 @@ void WebServer::eventLoop() {
             }
 
             if (!conn->read_once()) {
+                Logger::instance().warn(std::string("read failed or peer closed, fd=") + std::to_string(fd));
                 conn->close_conn();
                 {
                     std::lock_guard<std::mutex> lock(m_users_mutex);
                     m_users.erase(fd);
                 }
+                m_timer.remove(fd);
                 remove_fd(m_epollfd, fd);
                 continue;
             }
+            m_timer.touch(fd, now);
 
             if (!m_pool) {
                 std::cerr << "[threadpool] not initialized" << std::endl;
+                Logger::instance().error("thread pool not initialized");
                 conn->close_conn();
                 {
                     std::lock_guard<std::mutex> lock(m_users_mutex);
                     m_users.erase(fd);
                 }
+                m_timer.remove(fd);
                 remove_fd(m_epollfd, fd);
                 continue;
             }
@@ -264,8 +319,10 @@ void WebServer::eventLoop() {
                 HttpConn::HTTP_CODE code = task_conn->process();
                 if (code == HttpConn::NO_REQUEST) {
                     if (!mod_epollin_fd(m_epollfd, fd, true)) {
+                        Logger::instance().warn(std::string("rearm EPOLLONESHOT failed, close fd=") + std::to_string(fd));
                         task_conn->close_conn();
                         remove_fd(m_epollfd, fd);
+                        m_timer.remove(fd);
                         std::lock_guard<std::mutex> lock(m_users_mutex);
                         m_users.erase(fd);
                     }
@@ -274,10 +331,12 @@ void WebServer::eventLoop() {
 
                 if (!task_conn->write()) {
                     std::perror("write");
+                    Logger::instance().warn(std::string("write failed, fd=") + std::to_string(fd));
                 }
 
                 task_conn->close_conn();
                 remove_fd(m_epollfd, fd);
+                m_timer.remove(fd);
                 std::lock_guard<std::mutex> lock(m_users_mutex);
                 m_users.erase(fd);
             });

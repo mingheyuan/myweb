@@ -2,6 +2,7 @@
 #define WEBSERVER_H
 
 #include "http_conn.h"
+#include "timer.h"
 #include "threadpool.h"
 
 #include <memory>
@@ -28,6 +29,8 @@ private:
     std::unique_ptr<ThreadPool> m_pool;
     std::unordered_map<int, std::shared_ptr<HttpConn> > m_users;
     std::mutex m_users_mutex;
+    TimerManager m_timer;
+    int m_timeout_sec;
 };
 
 #endif

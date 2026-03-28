@@ -1,8 +1,10 @@
 #include "http_conn.h"
+#include "logger.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cstring>
 #include <sstream>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -94,6 +96,7 @@ HttpConn::HTTP_CODE HttpConn::process()
     }
 
     if (code == BAD_REQUEST) {
+        Logger::instance().warn("http parse bad request");
         m_write_buffer = build_response(400, "Bad Request\n");
         m_state = 1;
         return BAD_REQUEST;
@@ -128,6 +131,7 @@ bool HttpConn::write()
         if (nsend == -1 && errno == EINTR) {
             continue;
         }
+        Logger::instance().warn(std::string("send failed: ") + std::strerror(errno));
         return false;
     }
 
