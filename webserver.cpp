@@ -1,15 +1,14 @@
 #include "webserver.h"
+#include "http_conn.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
-#include <sstream>
 #include <netinet/in.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <iostream>
-#include <string>
 #include <unistd.h>
 
 namespace {
@@ -41,70 +40,6 @@ void remove_fd(int epollfd, int fd)
 {
     epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, nullptr);
     close(fd);
-}
-
-std::string build_response(int code, const std::string &body)
-{
-    std::ostringstream oss;
-    if (code == 200)
-    {
-        oss << "HTTP/1.1 200 OK\r\n";
-    }
-    else if (code == 400)
-    {
-        oss << "HTTP/1.1 400 Bad Request\r\n";
-    }
-    else
-    {
-        oss << "HTTP/1.1 404 Not Found\r\n";
-    }
-
-    oss << "Content-Type: text/plain; charset=utf-8\r\n";
-    oss << "Connection: close\r\n";
-    oss << "Content-Length: " << body.size() << "\r\n\r\n";
-    oss << body;
-    return oss.str();
-}
-
-std::string handle_http_request(const std::string &request)
-{
-    std::size_t line_end = request.find("\r\n");
-    if (line_end == std::string::npos)
-    {
-        return build_response(400, "Bad Request\n");
-    }
-
-    std::string request_line = request.substr(0, line_end);
-    std::istringstream iss(request_line);
-    std::string method;
-    std::string path;
-    std::string version;
-    iss >> method >> path >> version;
-
-    if (method.empty() || path.empty() || version.empty())
-    {
-        return build_response(400, "Bad Request\n");
-    }
-
-    if (version != "HTTP/1.1" && version != "HTTP/1.0")
-    {
-        return build_response(400, "Unsupported HTTP Version\n");
-    }
-
-    if (method != "GET")
-    {
-        return build_response(400, "Only GET is supported in this stage\n");
-    }
-
-    if (path == "/")
-    {
-        return build_response(200, "TinyWebServer stage2: epoll LT + parser\n");
-    }
-    if (path == "/hello")
-    {
-        return build_response(200, "hello from tiny webserver\n");
-    }
-    return build_response(404, "Not Found\n");
 }
 } // namespace
 
@@ -205,6 +140,7 @@ void WebServer::eventLoop() {
     }
 
     epoll_event events[kMaxEvents];
+    HttpConn http_conn;
     std::cout << "[loop] epoll LT waiting events..." <<std::endl;
 
     while (true) {
@@ -260,7 +196,7 @@ void WebServer::eventLoop() {
             }
 
             std::string request(buf, static_cast<std::size_t>(nread));
-            std::string response = handle_http_request(request);
+            std::string response = http_conn.process(request);
 
             ssize_t nsend = send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
             if (nsend < 0) {
