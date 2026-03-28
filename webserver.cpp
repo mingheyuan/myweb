@@ -1,5 +1,4 @@
 #include "webserver.h"
-#include "http_conn.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -24,22 +23,37 @@ int set_nonblocking(int fd)
     return old_flags;
 }
 
-bool add_epollin_fd(int epollfd, int fd)
+bool add_epollin_fd(int epollfd, int fd, bool one_shot)
 {
     epoll_event ev;
     std::memset(&ev, 0, sizeof(ev));
     ev.data.fd = fd;
     ev.events = EPOLLIN;
+    if (one_shot) {
+        ev.events |= EPOLLONESHOT;
+    }
 
     if (epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &ev) == -1)
         return false;
     return set_nonblocking(fd) != -1;
 }
 
+bool mod_epollin_fd(int epollfd, int fd, bool one_shot)
+{
+    epoll_event ev;
+    std::memset(&ev, 0, sizeof(ev));
+    ev.data.fd = fd;
+    ev.events = EPOLLIN;
+    if (one_shot) {
+        ev.events |= EPOLLONESHOT;
+    }
+
+    return epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &ev) != -1;
+}
+
 void remove_fd(int epollfd, int fd)
 {
     epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, nullptr);
-    close(fd);
 }
 } // namespace
 
@@ -70,7 +84,8 @@ void WebServer::sql_pool() {
 }
 
 void WebServer::thread_pool() {
-    std::cout << "[threadpool] not implemented yet" << std::endl;
+    m_pool.reset(new ThreadPool(4));
+    std::cout << "[threadpool] started with 4 workers" << std::endl;
 }
 
 void WebServer::trig_mode() {
@@ -121,7 +136,7 @@ void WebServer::eventListen() {
         return;
     }
 
-    if (!add_epollin_fd(m_epollfd, m_listenfd)) {
+    if (!add_epollin_fd(m_epollfd, m_listenfd, false)) {
         std::perror("add listenfd to epoll");
         close(m_epollfd);
         m_epollfd = -1;
@@ -140,7 +155,6 @@ void WebServer::eventLoop() {
     }
 
     epoll_event events[kMaxEvents];
-    HttpConn http_conn;
     std::cout << "[loop] epoll LT waiting events..." <<std::endl;
 
     while (true) {
@@ -167,10 +181,17 @@ void WebServer::eventLoop() {
                     continue;
                 }
 
-                if (!add_epollin_fd(m_epollfd, connfd)) {
+                if (!add_epollin_fd(m_epollfd, connfd, true)) {
                     std::perror("add connfd to epoll");
                     close(connfd);
                     continue;
+                }
+
+                std::shared_ptr<HttpConn> conn(new HttpConn());
+                conn->init(connfd, client);
+                {
+                    std::lock_guard<std::mutex> lock(m_users_mutex);
+                    m_users[connfd] = conn;
                 }
 
                 std::cout << "[accept] " << inet_ntoa(client.sin_addr)
@@ -179,7 +200,27 @@ void WebServer::eventLoop() {
                 continue;
             }
 
+            std::shared_ptr<HttpConn> conn;
+            {
+                std::lock_guard<std::mutex> lock(m_users_mutex);
+                std::unordered_map<int, std::shared_ptr<HttpConn> >::iterator it = m_users.find(fd);
+                if (it != m_users.end()) {
+                    conn = it->second;
+                }
+            }
+
+            if (!conn) {
+                remove_fd(m_epollfd, fd);
+                close(fd);
+                continue;
+            }
+
             if ((events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) != 0) {
+                conn->close_conn();
+                {
+                    std::lock_guard<std::mutex> lock(m_users_mutex);
+                    m_users.erase(fd);
+                }
                 remove_fd(m_epollfd, fd);
                 continue;
             }
@@ -188,22 +229,58 @@ void WebServer::eventLoop() {
                 continue;
             }
 
-            char buf[2048];
-            ssize_t nread = recv(fd, buf, sizeof(buf), 0);
-            if (nread <= 0) {
+            if (!conn->read_once()) {
+                conn->close_conn();
+                {
+                    std::lock_guard<std::mutex> lock(m_users_mutex);
+                    m_users.erase(fd);
+                }
                 remove_fd(m_epollfd, fd);
                 continue;
             }
 
-            std::string request(buf, static_cast<std::size_t>(nread));
-            std::string response = http_conn.process(request);
-
-            ssize_t nsend = send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
-            if (nsend < 0) {
-                std::perror("send");
+            if (!m_pool) {
+                std::cerr << "[threadpool] not initialized" << std::endl;
+                conn->close_conn();
+                {
+                    std::lock_guard<std::mutex> lock(m_users_mutex);
+                    m_users.erase(fd);
+                }
+                remove_fd(m_epollfd, fd);
+                continue;
             }
 
-            remove_fd(m_epollfd, fd);
+            m_pool->enqueue([this, fd]() {
+                std::shared_ptr<HttpConn> task_conn;
+                {
+                    std::lock_guard<std::mutex> lock(m_users_mutex);
+                    std::unordered_map<int, std::shared_ptr<HttpConn> >::iterator it = m_users.find(fd);
+                    if (it == m_users.end()) {
+                        return;
+                    }
+                    task_conn = it->second;
+                }
+
+                HttpConn::HTTP_CODE code = task_conn->process();
+                if (code == HttpConn::NO_REQUEST) {
+                    if (!mod_epollin_fd(m_epollfd, fd, true)) {
+                        task_conn->close_conn();
+                        remove_fd(m_epollfd, fd);
+                        std::lock_guard<std::mutex> lock(m_users_mutex);
+                        m_users.erase(fd);
+                    }
+                    return;
+                }
+
+                if (!task_conn->write()) {
+                    std::perror("write");
+                }
+
+                task_conn->close_conn();
+                remove_fd(m_epollfd, fd);
+                std::lock_guard<std::mutex> lock(m_users_mutex);
+                m_users.erase(fd);
+            });
         }
     }
 }

@@ -1,6 +1,13 @@
 #ifndef WEBSERVER_H
 #define WEBSERVER_H
 
+#include "http_conn.h"
+#include "threadpool.h"
+
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+
 class WebServer {
 public:
     WebServer();
@@ -18,6 +25,9 @@ private:
     int m_port;
     int m_listenfd;
     int m_epollfd;
+    std::unique_ptr<ThreadPool> m_pool;
+    std::unordered_map<int, std::shared_ptr<HttpConn> > m_users;
+    std::mutex m_users_mutex;
 };
 
 #endif
