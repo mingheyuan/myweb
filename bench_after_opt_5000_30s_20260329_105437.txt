@@ -1,0 +1,24 @@
+Benchmark started at 2026-03-29 10:54:37
+webbench=/home/yuan/studyweb/TinyWebServer/test_pressure/webbench-1.5/webbench
+server=./server
+
+===== Proactor LT/LT =====
+port=18120, clients=5000, duration=30s, m=0, a=0
+Speed=168332 pages/min, 392128 bytes/sec.
+Requests: 82844 susceed, 1322 failed.
+
+===== Proactor ET/ET =====
+port=18121, clients=5000, duration=30s, m=3, a=0
+Speed=1515846 pages/min, 3587492 bytes/sec.
+Requests: 757922 susceed, 1 failed.
+
+===== Reactor LT/LT =====
+port=18122, clients=5000, duration=30s, m=0, a=1
+Speed=199330 pages/min, 464183 bytes/sec.
+Requests: 98067 susceed, 1598 failed.
+
+===== Reactor ET/ET =====
+port=18123, clients=5000, duration=30s, m=3, a=1
+Speed=1642438 pages/min, 3884386 bytes/sec.
+Requests: 820643 susceed, 576 failed.
+

@@ -12,7 +12,7 @@ Logger &Logger::instance()
     return logger;
 }
 
-Logger::Logger() : m_initialized(false), m_async_mode(false), m_stopping(false)
+Logger::Logger() : m_initialized(false), m_async_mode(false), m_stopping(false), m_silent(false)
 {
 }
 
@@ -75,6 +75,12 @@ void Logger::shutdown()
     }
 }
 
+void Logger::set_silent(bool silent)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_silent = silent;
+}
+
 void Logger::info(const std::string &msg)
 {
     write_line("INFO", msg);
@@ -95,6 +101,9 @@ void Logger::write_line(const std::string &level, const std::string &msg)
     std::string line = build_line(level, msg);
 
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_silent) {
+        return;
+    }
     if (!m_initialized) {
         std::cerr << line << std::endl;
         return;

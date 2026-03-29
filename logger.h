@@ -14,6 +14,7 @@ public:
 
     bool init(const std::string &file_path, bool async_mode);
     void shutdown();
+    void set_silent(bool silent);
 
     void info(const std::string &msg);
     void warn(const std::string &msg);
@@ -35,6 +36,7 @@ private:
     bool m_initialized;
     bool m_async_mode;
     bool m_stopping;
+    bool m_silent;
 
     std::mutex m_mutex;
     std::condition_variable m_cv;

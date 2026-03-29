@@ -7,7 +7,19 @@ int main(int argc,char* argv[]) {
     config.parse_arg(argc,argv);
 
     WebServer server;
-    server.init(config.PORT);
+    server.init(config.PORT,
+                config.LOGWrite,
+                config.close_log,
+                config.thread_num,
+                config.timeout_sec,
+                config.sql_num,
+                config.TRIGMode,
+                config.actor_model,
+                config.db_host,
+                config.db_user,
+                config.db_password,
+                config.db_name,
+                config.db_port);
     server.log_write();
     server.sql_pool();
     server.thread_pool();

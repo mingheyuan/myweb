@@ -1,5 +1,6 @@
 #include "http_conn.h"
 #include "logger.h"
+#include "sql_connection_pool.h"
 
 #include <algorithm>
 #include <cctype>
@@ -8,6 +9,7 @@
 #include <sstream>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <unordered_map>
 
 namespace {
 std::string trim_copy(const std::string &s)
@@ -31,6 +33,41 @@ std::string to_lower_copy(std::string s)
         return static_cast<char>(std::tolower(c));
     });
     return s;
+}
+
+std::unordered_map<std::string, std::string> parse_form_urlencoded(const std::string &body)
+{
+    std::unordered_map<std::string, std::string> kv;
+    std::size_t start = 0;
+    while (start < body.size()) {
+        std::size_t amp = body.find('&', start);
+        if (amp == std::string::npos) {
+            amp = body.size();
+        }
+
+        std::string pair = body.substr(start, amp - start);
+        std::size_t eq = pair.find('=');
+        if (eq != std::string::npos) {
+            std::string key = pair.substr(0, eq);
+            std::string value = pair.substr(eq + 1);
+            kv[key] = value;
+        }
+
+        start = amp + 1;
+    }
+    return kv;
+}
+
+std::string escape_mysql_string(MYSQL *conn, const std::string &input)
+{
+    if (!conn) {
+        return std::string();
+    }
+    std::string out;
+    out.resize(input.size() * 2 + 1);
+    unsigned long len = mysql_real_escape_string(conn, &out[0], input.c_str(), input.size());
+    out.resize(len);
+    return out;
 }
 } // namespace
 
@@ -279,6 +316,76 @@ HttpConn::LINE_STATUS HttpConn::parse_line(const std::string &raw_request, std::
 
 std::string HttpConn::route_and_build(const HttpRequest &request)
 {
+    if (request.method == "POST" && (request.path == "/register" || request.path == "/login")) {
+        if (!SqlConnectionPool::instance().is_ready()) {
+            return build_response(500, "Database not ready\n");
+        }
+
+        std::unordered_map<std::string, std::string> form = parse_form_urlencoded(request.body);
+        std::string username = form["username"];
+        std::string password = form["password"];
+        if (username.empty() || password.empty()) {
+            return build_response(400, "username/password required\n");
+        }
+
+        MYSQL *mysql = nullptr;
+        SqlConnRAII mysql_raii(&mysql);
+        if (!mysql) {
+            return build_response(500, "Database connection failed\n");
+        }
+
+        std::string esc_user = escape_mysql_string(mysql, username);
+        std::string esc_pwd = escape_mysql_string(mysql, password);
+
+        if (request.path == "/register") {
+            std::string check_sql = "SELECT username FROM user WHERE username='" + esc_user + "' LIMIT 1";
+            if (mysql_query(mysql, check_sql.c_str()) != 0) {
+                Logger::instance().error(std::string("mysql query failed(register-check): ") + mysql_error(mysql));
+                return build_response(500, "Database query error\n");
+            }
+
+            MYSQL_RES *res = mysql_store_result(mysql);
+            if (res) {
+                MYSQL_ROW row = mysql_fetch_row(res);
+                mysql_free_result(res);
+                if (row) {
+                    return build_response(200, "register failed: user exists\n");
+                }
+            }
+
+            std::string insert_sql = "INSERT INTO user(username, passwd) VALUES('" + esc_user + "','" + esc_pwd + "')";
+            if (mysql_query(mysql, insert_sql.c_str()) != 0) {
+                Logger::instance().error(std::string("mysql query failed(register-insert): ") + mysql_error(mysql));
+                return build_response(500, "register failed\n");
+            }
+            return build_response(200, "register success\n");
+        }
+
+        std::string login_sql = "SELECT passwd FROM user WHERE username='" + esc_user + "' LIMIT 1";
+        if (mysql_query(mysql, login_sql.c_str()) != 0) {
+            Logger::instance().error(std::string("mysql query failed(login): ") + mysql_error(mysql));
+            return build_response(500, "Database query error\n");
+        }
+
+        MYSQL_RES *res = mysql_store_result(mysql);
+        if (!res) {
+            return build_response(500, "Database result error\n");
+        }
+
+        MYSQL_ROW row = mysql_fetch_row(res);
+        if (!row) {
+            mysql_free_result(res);
+            return build_response(200, "login failed: user not found\n");
+        }
+
+        std::string stored = row[0] ? row[0] : "";
+        mysql_free_result(res);
+        if (stored == password) {
+            return build_response(200, "login success\n");
+        }
+        return build_response(200, "login failed: wrong password\n");
+    }
+
     if (request.method == "POST" && request.path == "/echo") {
         return build_response(200, std::string("echo: ") + request.body + "\n");
     }
@@ -302,6 +409,8 @@ std::string HttpConn::build_response(int status_code, const std::string &body) c
         oss << "HTTP/1.1 200 OK\r\n";
     } else if (status_code == 400) {
         oss << "HTTP/1.1 400 Bad Request\r\n";
+    } else if (status_code == 500) {
+        oss << "HTTP/1.1 500 Internal Server Error\r\n";
     } else {
         oss << "HTTP/1.1 404 Not Found\r\n";
     }
