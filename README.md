@@ -1,57 +1,57 @@
 # myweb
 
-`myweb` is a small C++11 HTTP server for learning and experimenting with Linux network programming. It uses non-blocking sockets, epoll, a worker thread pool, timers, logging, and an optional MySQL connection pool.
+`myweb` 是一个用于学习 Linux 网络编程的 C++11 轻量 HTTP 服务器。项目使用非阻塞 Socket、epoll、工作线程池、定时器、日志组件和可选的 MySQL 连接池。
 
-## Features
+## 功能
 
-- HTTP/1.0 and HTTP/1.1 request parsing for `GET` and `POST`.
-- epoll-based event loop with configurable LT/ET trigger modes.
-- Proactor and Reactor execution modes.
-- Worker thread pool and connection timeout management.
-- Plain-text routes for health checks and examples.
-- MySQL-backed `/register` and `/login` endpoints.
-- Synchronous or asynchronous logging.
+- 支持 `GET` 和 `POST` 的 HTTP/1.0、HTTP/1.1 请求解析。
+- 基于 epoll 的事件循环，支持 LT/ET 触发模式组合。
+- 支持 Proactor 和 Reactor 两种执行模型。
+- 工作线程池和连接超时管理。
+- 提供健康检查和示例文本路由。
+- 使用 MySQL 实现 `/register` 和 `/login`。
+- 支持同步或异步日志。
 
-## Routes
+## 路由
 
-| Method | Path | Description |
+| 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/` | Server status message |
-| `GET` | `/hello` | Hello response |
-| `GET` | `/about` | Project description |
-| `POST` | `/echo` | Returns the request body |
-| `POST` | `/register` | Creates a user with form fields `username` and `password` |
-| `POST` | `/login` | Checks a user's password |
+| `GET` | `/` | 返回服务器状态 |
+| `GET` | `/hello` | 返回 Hello 文本 |
+| `GET` | `/about` | 返回项目说明 |
+| `POST` | `/echo` | 原样返回请求体 |
+| `POST` | `/register` | 使用 `username` 和 `password` 注册用户 |
+| `POST` | `/login` | 校验用户密码 |
 
-The database endpoints expect `application/x-www-form-urlencoded` data. They use a `user(username, passwd)` table and store passwords as plain text, so the implementation is for local learning only.
+数据库接口接收 `application/x-www-form-urlencoded` 数据，使用 `user(username, passwd)` 表，并以明文保存密码，因此只适合本地学习。
 
-## Requirements
+## 环境要求
 
-The server depends on Linux APIs and is intended to be built on Linux:
+项目依赖 Linux API，建议在 Linux 上构建：
 
-- C++11 compiler
-- GNU Make
-- pthreads
-- MySQL client development headers and library, such as `libmysqlclient-dev`
-- `curl` for smoke tests
-- `webbench` for the optional benchmark script
+- 支持 C++11 的编译器。
+- GNU Make。
+- pthread。
+- MySQL 客户端开发头文件和库，例如 `libmysqlclient-dev`。
+- 用于冒烟测试的 `curl`。
+- 用于可选压测脚本的 `webbench`。
 
-## Build and Run
+## 构建和运行
 
 ```bash
 ./build.sh
 ./server
 ```
 
-The default HTTP port is `9006`. To run without a MySQL connection pool:
+默认 HTTP 端口为 `9006`。不启用 MySQL 连接池时可以运行：
 
 ```bash
 ./server -s 0
 ```
 
-The default database settings are `127.0.0.1:3306`, user `root`, password `123456`, and database `yourdb`. Pass database settings explicitly in real environments instead of relying on these development defaults.
+默认数据库配置为 `127.0.0.1:3306`、用户 `root`、密码 `123456`、数据库 `yourdb`。实际环境请显式传入数据库参数，不要依赖这些开发默认值。
 
-Example database setup:
+示例数据库初始化：
 
 ```sql
 CREATE DATABASE yourdb;
@@ -62,7 +62,7 @@ CREATE TABLE user (
 );
 ```
 
-Smoke tests:
+冒烟测试：
 
 ```bash
 curl -i http://127.0.0.1:9006/hello
@@ -71,49 +71,49 @@ curl -i -X POST http://127.0.0.1:9006/register -d 'username=alice&password=secre
 curl -i -X POST http://127.0.0.1:9006/login -d 'username=alice&password=secret'
 ```
 
-## Command-Line Options
+## 命令行参数
 
-| Option | Meaning | Default |
+| 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-p` | HTTP listen port | `9006` |
-| `-l` | Log mode: `0` sync, `1` async | `0` |
-| `-c` | Disable logging when set to `1` | `0` |
-| `-t` | Worker thread count | `4` |
-| `-T` | Connection timeout in seconds | `15` |
-| `-s` | MySQL connection pool size; `0` disables it | `4` |
-| `-m` | Trigger mode: `0` LT/LT, `1` LT/ET, `2` ET/LT, `3` ET/ET | `0` |
-| `-a` | Actor model: `0` Proactor, `1` Reactor | `0` |
-| `-H` | MySQL host | `127.0.0.1` |
-| `-U` | MySQL user | `root` |
-| `-W` | MySQL password | `123456` |
-| `-D` | MySQL database | `yourdb` |
-| `-P` | MySQL port | `3306` |
+| `-p` | HTTP 监听端口 | `9006` |
+| `-l` | 日志模式：`0` 同步，`1` 异步 | `0` |
+| `-c` | 设置为 `1` 时关闭日志 | `0` |
+| `-t` | 工作线程数 | `4` |
+| `-T` | 连接超时时间，单位秒 | `15` |
+| `-s` | MySQL 连接池大小，`0` 表示关闭 | `4` |
+| `-m` | 触发模式：`0` LT/LT、`1` LT/ET、`2` ET/LT、`3` ET/ET | `0` |
+| `-a` | 执行模型：`0` Proactor、`1` Reactor | `0` |
+| `-H` | MySQL 主机 | `127.0.0.1` |
+| `-U` | MySQL 用户 | `root` |
+| `-W` | MySQL 密码 | `123456` |
+| `-D` | MySQL 数据库 | `yourdb` |
+| `-P` | MySQL 端口 | `3306` |
 
-Example high-throughput configuration:
+高并发配置示例：
 
 ```bash
 ./server -p 9006 -c 1 -s 0 -m 3 -a 0 -t 8
 ```
 
-## Benchmarking
+## 压测
 
-`benchmark_5000.sh` runs four combinations of trigger and actor modes with `webbench`. Build the server first, then set `WB_BIN` if the benchmark binary is not at the script's default path:
+`benchmark_5000.sh` 使用 `webbench` 测试 4 种触发模式和执行模型组合。先构建服务；如果 webbench 不在脚本默认路径，可以指定 `WB_BIN`：
 
 ```bash
 WB_BIN=/path/to/webbench SERVER_BIN=./server bash benchmark_5000.sh
 ```
 
-The client count, duration, thread count, and output file can be overridden with `CLIENTS`, `DURATION`, `THREADS`, and `OUT_FILE`. See [PERFORMANCE.md](PERFORMANCE.md) for recorded results and caveats.
+客户端数量、持续时间、线程数和结果文件可以通过 `CLIENTS`、`DURATION`、`THREADS`、`OUT_FILE` 覆盖。已有结果和注意事项见 [PERFORMANCE.md](PERFORMANCE.md)。
 
-## Project Files
+## 主要文件
 
-- `webserver.cpp`: socket, epoll, event-loop, and mode configuration.
-- `http_conn.cpp`: HTTP parsing, routing, and response construction.
-- `threadpool.cpp`: worker queue and task execution.
-- `timer.cpp`: connection timeout management.
-- `sql_connection_pool.cpp`: MySQL connection pool and RAII wrapper.
-- `logger.cpp`: synchronous and asynchronous logging.
+- `webserver.cpp`：Socket、epoll、事件循环和模式配置。
+- `http_conn.cpp`：HTTP 解析、路由和响应构造。
+- `threadpool.cpp`：工作队列和任务执行。
+- `timer.cpp`：连接超时管理。
+- `sql_connection_pool.cpp`：MySQL 连接池和 RAII 封装。
+- `logger.cpp`：同步和异步日志。
 
-## Security Notes
+## 安全说明
 
-This project is not production-ready. Passwords are stored and compared as plain text, transport is unencrypted, authentication is minimal, and the default database credentials are intentionally simple development values.
+项目尚未达到生产要求：密码以明文保存和比对，传输未加密，认证逻辑较简单，数据库默认凭据也仅用于开发环境。
